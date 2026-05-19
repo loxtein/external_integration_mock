@@ -164,6 +164,27 @@ app.post('/api/status', (req, res) => {
     });
 });
 
+// --- POST /api/status/inactive --- Always returns INACTIVE
+app.post('/api/status/inactive', (req, res) => {
+    const { external_customer_id, secret_key, client_secret } = req.body;
+    const auth_secret = client_secret || secret_key;
+    console.log(`[STATUS-INACTIVE] external_customer_id=${external_customer_id}`);
+
+    if (auth_secret !== DUMMY_SECRET) {
+        return res.status(401).json({ error: 'invalid_client' });
+    }
+
+    if (!external_customer_id) {
+        return res.status(400).json({ error: 'missing_external_customer_id' });
+    }
+
+    res.json({
+        external_customer_id,
+        subscription_status: 'INACTIVE',
+        expires_at: null,
+    });
+});
+
 // --- Login Page Renderer ---
 function renderLoginPage(redirect_uri, state, error = '') {
     const escHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
