@@ -15,15 +15,17 @@ const generateRandomUsers = () => {
     const firstNames = ['Andi', 'Budi', 'Citra', 'Dewi', 'Eko', 'Fajar', 'Gita', 'Hadi', 'Indah', 'Joko'];
     const lastNames = ['Pratama', 'Santoso', 'Dewi', 'Wulandari', 'Kurniawan', 'Hidayat', 'Lestari', 'Saputra', 'Sari', 'Susanto'];
     const users = [];
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 4; i++) {
         const first = firstNames[Math.floor(Math.random() * firstNames.length)];
         const last = lastNames[Math.floor(Math.random() * lastNames.length)];
         const randomNum = Math.floor(100 + Math.random() * 900);
         const email = `${first.toLowerCase()}.${last.toLowerCase()}${randomNum}@${domains[Math.floor(Math.random() * domains.length)]}`;
+        const subscribed = i < 3;
         users.push({
             email,
             password: '123456',
-            name: `${first} ${last}`
+            name: `${first} ${last}`,
+            subscription_status: subscribed ? 'ACTIVE' : 'INACTIVE',
         });
     }
     return users;
@@ -32,6 +34,7 @@ const generateRandomUsers = () => {
 let DUMMY_USERS = generateRandomUsers();
 
 const authCodes = new Map();
+const knownUsers = new Map();
 
 // --- GET /login ---
 app.get('/login', (req, res) => {
@@ -59,7 +62,7 @@ app.post('/login', (req, res) => {
     if (!user && password === '123456') {
         const namePart = email.split('@')[0].split('.');
         const name = namePart.map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
-        user = { email, password, name: name || 'User' };
+        user = { email, password, name: name || 'User', subscription_status: 'ACTIVE' };
         DUMMY_USERS.push(user);
     }
 
@@ -69,9 +72,15 @@ app.post('/login', (req, res) => {
 
     const pair_code = crypto.randomBytes(16).toString('hex');
 
+    knownUsers.set(user.email, {
+        name: user.name,
+        subscription_status: user.subscription_status || 'ACTIVE',
+    });
+
     authCodes.set(pair_code, {
         email: user.email,
         name: user.name,
+        subscription_status: user.subscription_status || 'ACTIVE',
         expires_at: Date.now() + 5 * 60 * 1000,
         used: false,
     });
@@ -85,10 +94,11 @@ app.post('/login', (req, res) => {
 
 // --- POST /api/verify ---
 app.post('/api/verify', (req, res) => {
-    const { code, secret_key } = req.body;
+    const { code, secret_key, client_secret } = req.body;
+    const auth_secret = client_secret || secret_key;
     console.log(`[VERIFY] code=${code}`);
 
-    if (secret_key !== DUMMY_SECRET) {
+    if (auth_secret !== DUMMY_SECRET) {
         return res.status(401).json({ error: 'invalid_client' });
     }
 
@@ -101,17 +111,19 @@ app.post('/api/verify', (req, res) => {
     codeData.used = true;
 
     res.json({
-        email: codeData.email,
+        external_customer_id: codeData.email,
         name: codeData.name,
+        subscription_status: codeData.subscription_status,
     });
 });
 
 // --- POST /api/memberships ---
 app.post('/api/memberships', (req, res) => {
-    const { emails, secret_key } = req.body;
+    const { emails, secret_key, client_secret } = req.body;
+    const auth_secret = client_secret || secret_key;
     console.log(`[MEMBERSHIPS] emails=${JSON.stringify(emails)}`);
 
-    if (secret_key !== DUMMY_SECRET) {
+    if (auth_secret !== DUMMY_SECRET) {
         return res.status(401).json({ error: 'invalid_client' });
     }
 
@@ -122,6 +134,30 @@ app.post('/api/memberships', (req, res) => {
     }));
 
     res.json(result);
+});
+
+// --- POST /api/status --- Single customer subscription status
+app.post('/api/status', (req, res) => {
+    const { external_customer_id, secret_key, client_secret } = req.body;
+    const auth_secret = client_secret || secret_key;
+    console.log(`[STATUS] external_customer_id=${external_customer_id}`);
+
+    if (auth_secret !== DUMMY_SECRET) {
+        return res.status(401).json({ error: 'invalid_client' });
+    }
+
+    if (!external_customer_id) {
+        return res.status(400).json({ error: 'missing_external_customer_id' });
+    }
+
+    const userData = knownUsers.get(external_customer_id);
+    const status = userData ? userData.subscription_status : 'ACTIVE';
+
+    res.json({
+        external_customer_id,
+        subscription_status: status,
+        expires_at: status === 'ACTIVE' ? '2026-12-31T00:00:00Z' : null,
+    });
 });
 
 // --- Login Page Renderer ---
@@ -232,6 +268,25 @@ function renderLoginPage(redirect_uri, state, error = '') {
     }
     .hint th { color: #94a3b8; }
     .hint td { color: #cbd5e1; font-family: monospace; font-size: 0.75rem; }
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.5rem;
+      border-radius: 9999px;
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      font-family: system-ui, sans-serif;
+    }
+    .badge.active {
+      background: rgba(34, 197, 94, 0.15);
+      color: #4ade80;
+      border: 1px solid rgba(34, 197, 94, 0.3);
+    }
+    .badge.inactive {
+      background: rgba(239, 68, 68, 0.15);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
   </style>
 </head>
 <body>
@@ -257,8 +312,14 @@ function renderLoginPage(redirect_uri, state, error = '') {
     <div class="hint">
       <strong>Dummy Accounts:</strong>
       <table>
-        <tr><th>Email</th><th>Password</th></tr>
-        ${DUMMY_USERS.map(u => `<tr><td>${escHtml(u.email)}</td><td>${escHtml(u.password)}</td></tr>`).join('')}
+        <tr><th>Email</th><th>Password</th><th>Status</th></tr>
+        ${DUMMY_USERS.map(u => {
+          const isActive = u.subscription_status === 'ACTIVE';
+          const badge = isActive
+            ? '<span class="badge active">ACTIVE</span>'
+            : '<span class="badge inactive">INACTIVE</span>';
+          return `<tr><td>${escHtml(u.email)}</td><td>${escHtml(u.password)}</td><td>${badge}</td></tr>`;
+        }).join('')}
       </table>
     </div>
   </div>
