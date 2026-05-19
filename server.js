@@ -20,12 +20,12 @@ const generateRandomUsers = () => {
         const last = lastNames[Math.floor(Math.random() * lastNames.length)];
         const randomNum = Math.floor(100 + Math.random() * 900);
         const email = `${first.toLowerCase()}.${last.toLowerCase()}${randomNum}@${domains[Math.floor(Math.random() * domains.length)]}`;
-        const subscribed = i < 3;
+        const subscription_status = Math.random() < 0.5 ? 'ACTIVE' : 'INACTIVE';
         users.push({
             email,
             password: '123456',
             name: `${first} ${last}`,
-            subscription_status: subscribed ? 'ACTIVE' : 'INACTIVE',
+            subscription_status,
         });
     }
     return users;
@@ -127,11 +127,15 @@ app.post('/api/memberships', (req, res) => {
         return res.status(401).json({ error: 'invalid_client' });
     }
 
-    const result = (emails || []).map(email => ({
-        email,
-        status: 'ACTIVE',
-        expires_at: '2026-12-31T00:00:00Z',
-    }));
+    const result = (emails || []).map(email => {
+        const userData = knownUsers.get(email);
+        const status = userData ? userData.subscription_status : 'ACTIVE';
+        return {
+            email,
+            status,
+            expires_at: status === 'ACTIVE' ? '2026-12-31T00:00:00Z' : null,
+        };
+    });
 
     res.json(result);
 });
